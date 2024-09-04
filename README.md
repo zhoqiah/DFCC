@@ -1,1 +1,1 @@
-Text-Visual Contrastive Distillation Learning for Multimodal Fake News Detection
+A Self-Distillation Framework with Compositional Contrastive Learning for Multimodal Fake News Detection
