@@ -14,13 +14,19 @@ import test_process
 import numpy as np
 from torch.utils.tensorboard import SummaryWriter
 from SCAttention import *
+import torch.nn.functional as F
+from loss.jsd_loss import JSDLoss
+from loss.nce_loss import NCELoss
 
+
+JSD_critertion = JSDLoss(weight=0.5)
+NCE_critertion = NCELoss(temperature=0.5)
 
 # 蒸馏损失
 def distillation_loss(student_output, teacher_output, temperature=3.0):
-    student_log_softmax = nn.functional.log_softmax(student_output / temperature, dim=1)
-    teacher_softmax = nn.functional.softmax(teacher_output / temperature, dim=1)
-    loss = nn.functional.kl_div(student_log_softmax, teacher_softmax, reduction='batchmean') * (temperature ** 2)
+    student_log_softmax = F.log_softmax(student_output / temperature, dim=1)
+    teacher_softmax = F.softmax(teacher_output / temperature, dim=1)
+    loss = F.kl_div(student_log_softmax, teacher_softmax, reduction='batchmean') * (temperature ** 2)
     return loss
 
 
@@ -63,7 +69,9 @@ def dev_process(opt, critertion, cl_model, dev_loader, test_loader=None, last_F1
 
             classify_loss = critertion(origin_res, labels)
             distill_loss = distillation_loss(student_output, teacher_output)
-            loss = classify_loss + distill_loss / opt.batch_size
+            jsd_loss = JSD_critertion(student_output, teacher_output)
+            nce_loss = NCE_critertion(student_output, teacher_output, labels)
+            loss = classify_loss + nce_loss + distill_loss / opt.batch_size + jsd_loss / opt.batch_size
             dev_loss += loss.item()
 
             _, predicted = torch.max(origin_res, 1)
@@ -82,67 +90,112 @@ def dev_process(opt, critertion, cl_model, dev_loader, test_loader=None, last_F1
         y_pre = np.array(y_pre)
 
         # 评价指标
-        # dev_accuracy = accuracy_score(y_true, y_pre)
-        # dev_F1_weighted = f1_score(y_true, y_pre, average='weighted')
-        # dev_R_weighted = recall_score(y_true, y_pre, average='weighted')
-        # dev_precision_weighted = precision_score(y_true, y_pre, average='weighted')
-        # dev_F1 = f1_score(y_true, y_pre, average='macro')
-        # dev_R = recall_score(y_true, y_pre, average='macro')
-        # dev_precision = precision_score(y_true, y_pre, average='macro')
-
-        # 按照原论文
         dev_accuracy = accuracy_score(y_true, y_pre)
-        dev_F1_T = f1_score(y_true, y_pre, average='binary', pos_label=0)
-        dev_P_T = precision_score(y_true, y_pre, average='binary', pos_label=0)
-        dev_R_T = recall_score(y_true, y_pre, average='binary', pos_label=0)
+        dev_F1_weighted = f1_score(y_true, y_pre, average='weighted')
+        dev_R_weighted = recall_score(y_true, y_pre, average='weighted')
+        dev_precision_weighted = precision_score(y_true, y_pre, average='weighted')
+        dev_F1 = f1_score(y_true, y_pre, average='macro')
+        dev_R = recall_score(y_true, y_pre, average='macro')
+        dev_precision = precision_score(y_true, y_pre, average='macro')
 
-        dev_F1_F = f1_score(y_true, y_pre, average='binary', pos_label=1)
-        dev_P_F = precision_score(y_true, y_pre, average='binary', pos_label=1)
-        dev_R_F = recall_score(y_true, y_pre, average='binary', pos_label=1)
-
-        save_content = 'Dev  : Accuracy: %.6f, dev_F1_T: %.6f, dev_P_T: %.6f, dev_R_T: %.6f, dev_F1_F: %.6f, dev_P_F: %.6f, dev_R_F: %.6f, loss: %.6f' % \
-                       (dev_accuracy, dev_F1_T, dev_P_T, dev_R_T, dev_F1_F, dev_P_F, dev_R_F, dev_loss)
+        save_content = 'Dev  : Accuracy: %.6f, dev_F1_weighted: %.6f, dev_R_weighted: %.6f, dev_precision_weighted: %.6f, dev_F1: %.6f, dev_R: %.6f, dev_precision: %.6f, loss: %.6f' % \
+                       (dev_accuracy, dev_F1_weighted, dev_R_weighted, dev_precision_weighted, dev_F1, dev_R, dev_precision, dev_loss)
 
         print(save_content)
-
-        if log_summary_writer:
-            log_summary_writer.add_scalar('dev_info/loss_epoch', dev_loss, global_step=train_log['epoch'])
-            log_summary_writer.add_scalar('dev_info/acc', dev_accuracy, global_step=train_log['epoch'])
-            log_summary_writer.add_scalar('dev_info/dev_F1_T', dev_F1_T, global_step=train_log['epoch'])
-            log_summary_writer.add_scalar('dev_info/dev_P_T', dev_P_T, global_step=train_log['epoch'])
-            log_summary_writer.add_scalar('dev_info/dev_R_T', dev_R_T, global_step=train_log['epoch'])
-            log_summary_writer.add_scalar('dev_info/dev_F1_F', dev_F1_F, global_step=train_log['epoch'])
-            log_summary_writer.add_scalar('dev_info/dev_P_F', dev_P_F, global_step=train_log['epoch'])
-            log_summary_writer.add_scalar('dev_info/dev_R_F', dev_R_F, global_step=train_log['epoch'])
-            log_summary_writer.flush()
 
         if last_F1 is not None:
             WriteFile(
                 opt.save_model_path, 'train_correct_log.txt', save_content + '\n', 'a+')
             # 运行测试集
-            test_process.test_process(opt, critertion, cl_model, test_loader, last_F1, log_summary_writer, train_log['epoch'])
+            test_process.test_process(opt, critertion, cl_model, test_loader, last_F1, log_summary_writer,
+                                      train_log['epoch'])
 
             dev_log = {
                 "dev_accuracy": dev_accuracy,
-                "dev_F1_T": dev_F1_T,
-                "dev_P_T": dev_P_T,
-                "dev_R_T": dev_R_T,
-                "dev_F1_F": dev_F1_F,
-                "dev_P_F": dev_P_F,
-                "dev_R_F": dev_R_F,
+                "dev_F1_weighted": dev_F1_weighted,
+                "dev_R_weighted": dev_R_weighted,
+                "dev_precision_weighted": dev_precision_weighted,
+                "dev_F1": dev_F1,
+                "dev_R": dev_R,
+                "dev_precision": dev_precision,
                 "dev_loss": dev_loss
             }
 
-            last_Accuracy, is_save_model, model_name = compare_to_save(last_Accuracy, dev_accuracy, opt, cl_model, train_log, dev_log, 'Acc', opt.save_acc, add_enter=False)
+            last_Accuracy, is_save_model, model_name = compare_to_save(last_Accuracy, dev_accuracy, opt, cl_model,
+                                                                       train_log, dev_log, 'Acc', opt.save_acc,
+                                                                       add_enter=False)
             if is_save_model is True:
                 if opt.data_type == 'HFM':
-                    last_F1, is_save_model, model_name = compare_to_save(last_F1, dev_F1_T, opt, cl_model, train_log, dev_log, 'F1-marco', opt.save_F1, 'F1-marco', model_name)
+                    last_F1, is_save_model, model_name = compare_to_save(last_F1, dev_F1, opt, cl_model, train_log,
+                                                                         dev_log, 'F1-marco', opt.save_F1, 'F1-marco',
+                                                                         model_name)
                 else:
-                    last_F1, is_save_model, model_name = compare_to_save(last_F1, dev_P_F, opt, cl_model, train_log, dev_log, 'F1', opt.save_F1, 'F1', model_name)
+                    last_F1, is_save_model, model_name = compare_to_save(last_F1, dev_F1_weighted, opt, cl_model, train_log,
+                                                                         dev_log, 'F1', opt.save_F1, 'F1', model_name)
             else:
                 if opt.data_type == 'HFM':
-                    last_F1, is_save_model, model_name = compare_to_save(last_F1, dev_F1_T, opt, cl_model, train_log, dev_log, 'F1-marco', opt.save_F1)
+                    last_F1, is_save_model, model_name = compare_to_save(last_F1, dev_F1, opt, cl_model, train_log,
+                                                                         dev_log, 'F1-marco', opt.save_F1)
                 else:
-                    last_F1, is_save_model, model_name = compare_to_save(last_F1, dev_P_F, opt, cl_model, train_log, dev_log, 'F1', opt.save_F1)
+                    last_F1, is_save_model, model_name = compare_to_save(last_F1, dev_F1_weighted, opt, cl_model, train_log,
+                                                                         dev_log, 'F1', opt.save_F1)
 
             return last_F1, last_Accuracy
+
+        # 按照原论文
+        # dev_accuracy = accuracy_score(y_true, y_pre)
+        # dev_F1_T = f1_score(y_true, y_pre, average='binary', pos_label=0)
+        # dev_P_T = precision_score(y_true, y_pre, average='binary', pos_label=0)
+        # dev_R_T = recall_score(y_true, y_pre, average='binary', pos_label=0)
+        #
+        # dev_F1_F = f1_score(y_true, y_pre, average='binary', pos_label=1)
+        # dev_P_F = precision_score(y_true, y_pre, average='binary', pos_label=1)
+        # dev_R_F = recall_score(y_true, y_pre, average='binary', pos_label=1)
+
+        # save_content = 'Dev  : Accuracy: %.6f, dev_F1_T: %.6f, dev_P_T: %.6f, dev_R_T: %.6f, dev_F1_F: %.6f, dev_P_F: %.6f, dev_R_F: %.6f, loss: %.6f' % \
+        #                (dev_accuracy, dev_F1_T, dev_P_T, dev_R_T, dev_F1_F, dev_P_F, dev_R_F, dev_loss)
+        #
+        # print(save_content)
+        #
+        # if log_summary_writer:
+        #     log_summary_writer.add_scalar('dev_info/loss_epoch', dev_loss, global_step=train_log['epoch'])
+        #     log_summary_writer.add_scalar('dev_info/acc', dev_accuracy, global_step=train_log['epoch'])
+        #     log_summary_writer.add_scalar('dev_info/dev_F1_T', dev_F1_T, global_step=train_log['epoch'])
+        #     log_summary_writer.add_scalar('dev_info/dev_P_T', dev_P_T, global_step=train_log['epoch'])
+        #     log_summary_writer.add_scalar('dev_info/dev_R_T', dev_R_T, global_step=train_log['epoch'])
+        #     log_summary_writer.add_scalar('dev_info/dev_F1_F', dev_F1_F, global_step=train_log['epoch'])
+        #     log_summary_writer.add_scalar('dev_info/dev_P_F', dev_P_F, global_step=train_log['epoch'])
+        #     log_summary_writer.add_scalar('dev_info/dev_R_F', dev_R_F, global_step=train_log['epoch'])
+        #     log_summary_writer.flush()
+
+        # if last_F1 is not None:
+        #     WriteFile(
+        #         opt.save_model_path, 'train_correct_log.txt', save_content + '\n', 'a+')
+        #     # 运行测试集
+        #     test_process.test_process(opt, critertion, cl_model, test_loader, last_F1, log_summary_writer, train_log['epoch'])
+        #
+        #
+        #     dev_log = {
+        #         "dev_accuracy": dev_accuracy,
+        #         "dev_F1_T": dev_F1_T,
+        #         "dev_P_T": dev_P_T,
+        #         "dev_R_T": dev_R_T,
+        #         "dev_F1_F": dev_F1_F,
+        #         "dev_P_F": dev_P_F,
+        #         "dev_R_F": dev_R_F,
+        #         "dev_loss": dev_loss
+        #     }
+        #
+        #     last_Accuracy, is_save_model, model_name = compare_to_save(last_Accuracy, dev_accuracy, opt, cl_model, train_log, dev_log, 'Acc', opt.save_acc, add_enter=False)
+        #     if is_save_model is True:
+        #         if opt.data_type == 'HFM':
+        #             last_F1, is_save_model, model_name = compare_to_save(last_F1, dev_F1_T, opt, cl_model, train_log, dev_log, 'F1-marco', opt.save_F1, 'F1-marco', model_name)
+        #         else:
+        #             last_F1, is_save_model, model_name = compare_to_save(last_F1, dev_P_F, opt, cl_model, train_log, dev_log, 'F1', opt.save_F1, 'F1', model_name)
+        #     else:
+        #         if opt.data_type == 'HFM':
+        #             last_F1, is_save_model, model_name = compare_to_save(last_F1, dev_F1_T, opt, cl_model, train_log, dev_log, 'F1-marco', opt.save_F1)
+        #         else:
+        #             last_F1, is_save_model, model_name = compare_to_save(last_F1, dev_P_F, opt, cl_model, train_log, dev_log, 'F1', opt.save_F1)
+        #
+        #     return last_F1, last_Accuracy

@@ -23,21 +23,26 @@ from datetime import datetime
 from torch.utils.tensorboard import SummaryWriter
 # from model_origin import ModelParam
 from model import ModelParam
+import warnings
+
+
+# 忽视所有警告
+warnings.filterwarnings('ignore')
 
 
 if __name__ == '__main__':
     parse = argparse.ArgumentParser()
     parse.add_argument('-run_type', type=int,
-                       default=1, help='1: train, 2: debug train, 3: dev, 4: test')  # 1
+                       default=2, help='1: train, 2: debug train, 3: dev, 4: test')  # 1
     parse.add_argument('-save_model_path', type=str,
                        default='checkpoints', help='save the good model.pth path')
-    parse.add_argument('-add_note', type=str, default='weibo', help='Additional instructions when saving files')  # ''
+    parse.add_argument('-add_note', type=str, default='weibo2', help='Additional instructions when saving files')  # ''
     parse.add_argument('-gpu_num', type=str, default='0', help='gpu index')
     parse.add_argument('-gpu0_bsz', type=int, default=0,
                        help='the first GPU batch size')
     parse.add_argument('-epoch', type=int, default=20, help='train epoch num')  # 30
     parse.add_argument('-batch_size', type=int, default=32,
-                       help='batch size number') # transformer:16, multiheadattention: 32
+                       help='batch size number')  # transformer:16, multiheadattention: 32
     parse.add_argument('-acc_grad', type=int, default=1, help='Number of steps to accumulate gradient on '
                                                               '(divide the batch_size and accumulate)')
     parse.add_argument('-lr', type=float, default=2e-5, help='learning rate')  # 2e-5
@@ -47,7 +52,7 @@ if __name__ == '__main__':
     parse.add_argument('-warmup_step_epoch', type=float,
                        default=2, help='warmup learning step')  #2
     parse.add_argument('-num_workers', type=int, default=4,
-                       help='loader dataset thread number')  # 0
+                       help='loader dataset thread number')  # 0,
     parse.add_argument('-l_dropout', type=float, default=0.1,
                        help='classify linear dropout')  # 0.1
     parse.add_argument('-train_log_file_name', type=str,
@@ -58,9 +63,11 @@ if __name__ == '__main__':
                        help='torch.optim.Adam betas_1')
     parse.add_argument('-optim_b2', type=float, default=0.999,
                        help='torch.optim.Adam betas_1')
-    parse.add_argument('-data_path_name', type=str, default='weibo',
+    # parse.add_argument('-weight_decay', type=float, default=0.999,
+    #                    help='torch.optim.Adam betas_1')
+    parse.add_argument('-data_path_name', type=str, default='weibo2',
                        help='train, dev and test data path name')  # 10-flod-1
-    parse.add_argument('-data_type', type=str, default='weibo',
+    parse.add_argument('-data_type', type=str, default='weibo2',
                        help='Train data type: twitter and weibo and pheme')
     parse.add_argument('-word_length', type=int,
                        default=197, help='the sentence\'s word length')  # 200
@@ -77,9 +84,9 @@ if __name__ == '__main__':
                        help='"all" represents the overall features and regional features of the picture, and "CLS" represents the overall features of the picture')
     parse.add_argument('-text_length_dynamic', type=int, default=0, help='1: Dynamic length; 0: fixed length')  # 1
     parse.add_argument('-fuse_type', type=str, default='ave', help='att, ave, max')  # max
-    parse.add_argument('-tran_dim', type=int, default=768, help='Input dimension of text and picture encoded transformer')
-    parse.add_argument('-tran_num_layers', type=int, default=5, help='The layer of transformer') # 3
-    parse.add_argument('-image_num_layers', type=int, default=1, help='The layer of images transformer')  #3
+    parse.add_argument('-tran_dim', type=int, default=768, help='Input dimension of text and picture encoded transformer')  # 768
+    parse.add_argument('-tran_num_layers', type=int, default=5, help='The layer of transformer')  # 3
+    parse.add_argument('-image_num_layers', type=int, default=1, help='The layer of images transformer')  # 3
     parse.add_argument('-train_fuse_model_epoch', type=int, default=20, help='The number of epoch of the model that only trains the fusion layer')  # 10
 
     # 布尔类型的参数
@@ -169,8 +176,8 @@ if __name__ == '__main__':
     elif opt.data_type == 'weibo2':
         data_path_root = abl_path + 'dataset/data/weibo2/'
         train_data_path = data_path_root + 'train.json'
-        dev_data_path = data_path_root + 'test.json'
-        test_data_path = data_path_root + 'valid.json'
+        dev_data_path = data_path_root + 'valid.json'
+        test_data_path = data_path_root + 'test.json'
         photo_path = data_path_root + '/images'
         image_coordinate = None
         data_translation_path = data_path_root + '/weibo.json'
@@ -230,7 +237,7 @@ if __name__ == '__main__':
         train_process.train_process(opt, train_loader, dev_loader, test_loader, cl_fuse_model, critertion, log_summary_writer=log_summary_writer)
     elif opt.run_type == 2:
         print('\nTest Begin')
-        model_path = "checkpoints/2023-11-27-02-14-45-weibo-/11-27-06-11-00-Acc-0.88874.pth"
+        model_path = "checkpoints/2024-08-30-14-46-57-weibo2-/08-30-15-53-07-F1-0.88572.pth"
         cl_fuse_model.load_state_dict(torch.load(model_path, map_location='cpu'), strict=True)
         test_process.test_process(opt, critertion, cl_fuse_model, test_loader, epoch=1)
 

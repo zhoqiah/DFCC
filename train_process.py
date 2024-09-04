@@ -7,13 +7,19 @@ from model import ModelParam
 import dev_process
 import numpy as np
 import torch.nn as nn
+import torch.nn.functional as F
+from loss.jsd_loss import JSDLoss
+from loss.nce_loss import NCELoss
 
+
+JSD_critertion = JSDLoss(weight=0.5)
+NCE_critertion = NCELoss(temperature=0.5)
 
 # 蒸馏损失
 def distillation_loss(student_output, teacher_output, temperature=3.0):
-    student_log_softmax = nn.functional.log_softmax(student_output / temperature, dim=1)
-    teacher_softmax = nn.functional.softmax(teacher_output / temperature, dim=1)
-    loss = nn.functional.kl_div(student_log_softmax, teacher_softmax, reduction='batchmean') * (temperature ** 2)
+    student_log_softmax = F.log_softmax(student_output / temperature, dim=1)
+    teacher_softmax = F.softmax(teacher_output / temperature, dim=1)
+    loss = F.kl_div(student_log_softmax, teacher_softmax, reduction='batchmean') * (temperature ** 2)
     return loss
 
 
@@ -33,11 +39,11 @@ def train_process(opt, train_loader, dev_loader, test_loader, cl_model, criterti
     ]
 
     if opt.optim == 'adam':
-        optimizer = Adam(optimizer_grouped_parameters, betas=(opt.optim_b1, opt.optim_b2))
+        optimizer = Adam(optimizer_grouped_parameters, betas=(opt.optim_b1, opt.optim_b2), weight_decay=1e-4)
     elif opt.optim == 'adamw':
-        optimizer = AdamW(optimizer_grouped_parameters, betas=(opt.optim_b1, opt.optim_b2))
+        optimizer = AdamW(optimizer_grouped_parameters, betas=(opt.optim_b1, opt.optim_b2), weight_decay=1e-4)
     elif opt.optim == 'sgd':
-        optimizer = SGD(optimizer_grouped_parameters, momentum=opt.momentum)
+        optimizer = SGD(optimizer_grouped_parameters, momentum=opt.momentum, weight_decay=1e-4)
 
     orgin_param = ModelParam()
     augment_param = ModelParam()
@@ -86,7 +92,9 @@ def train_process(opt, train_loader, dev_loader, test_loader, cl_model, criterti
 
             classify_loss = critertion(origin_res, labels)
             distill_loss = distillation_loss(student_output, teacher_output)
-            loss = classify_loss + distill_loss / opt.batch_size
+            jsd_loss = JSD_critertion(student_output, teacher_output)
+            nce_loss = NCE_critertion(student_output, teacher_output, labels)
+            loss = classify_loss + nce_loss + distill_loss / opt.batch_size + jsd_loss / opt.batch_size
 
             loss.backward()
             train_loader_tqdm.set_description("Train Iteration, loss: %.6f, lr: %e" %
@@ -115,49 +123,76 @@ def train_process(opt, train_loader, dev_loader, test_loader, cl_model, criterti
         y_pre = np.array(y_pre)
 
         # 评价指标
-        # train_accuracy = accuracy_score(y_true, y_pre)
-        # train_F1_weighted = f1_score(y_true, y_pre, average='weighted')
-        # train_R_weighted = recall_score(y_true, y_pre, average='weighted')
-        # train_precision_weighted = precision_score(y_true, y_pre, average='weighted')
-        # train_F1 = f1_score(y_true, y_pre, average='macro')
-        # train_R = recall_score(y_true, y_pre, average='macro')
-        # train_precision = precision_score(y_true, y_pre, average='macro')
+        train_accuracy = accuracy_score(y_true, y_pre)
+        train_F1_weighted = f1_score(y_true, y_pre, average='weighted')
+        train_R_weighted = recall_score(y_true, y_pre, average='weighted')
+        train_precision_weighted = precision_score(y_true, y_pre, average='weighted')
+        train_F1 = f1_score(y_true, y_pre, average='macro')
+        train_R = recall_score(y_true, y_pre, average='macro')
+        train_precision = precision_score(y_true, y_pre, average='macro')
 
         # 按照原论文
-        train_accuracy = accuracy_score(y_true, y_pre)
-        train_F1_T = f1_score(y_true, y_pre, average='binary', pos_label=0)
-        train_P_T = precision_score(y_true, y_pre, average='binary', pos_label=0)
-        train_R_T = recall_score(y_true, y_pre, average='binary', pos_label=0)
+        # train_accuracy = accuracy_score(y_true, y_pre)
+        # train_F1_T = f1_score(y_true, y_pre, average='binary', pos_label=0)
+        # train_P_T = precision_score(y_true, y_pre, average='binary', pos_label=0)
+        # train_R_T = recall_score(y_true, y_pre, average='binary', pos_label=0)
+        #
+        # train_F1_F = f1_score(y_true, y_pre, average='binary', pos_label=1)
+        # train_P_F = precision_score(y_true, y_pre, average='binary', pos_label=1)
+        # train_R_F = recall_score(y_true, y_pre, average='binary', pos_label=1)
 
-        train_F1_F = f1_score(y_true, y_pre, average='binary', pos_label=1)
-        train_P_F = precision_score(y_true, y_pre, average='binary', pos_label=1)
-        train_R_F = recall_score(y_true, y_pre, average='binary', pos_label=1)
-
-        save_content = 'Epoch: %d:\nTrain: Accuracy: %.6f, train_F1_T: %.6f, train_P_T: %.6f, train_R_T: %.6f, train_F1_F: %.6f, train_P_F: %.6f, train_R_F: %.6f, loss: %.6f' % \
-                       (epoch, train_accuracy, train_F1_T, train_P_T, train_R_T, train_F1_F, train_P_F, train_R_F, run_loss)
+        # save_content = 'Epoch: %d:\nTrain: Accuracy: %.6f, train_F1_T: %.6f, train_P_T: %.6f, train_R_T: %.6f, train_F1_F: %.6f, train_P_F: %.6f, train_R_F: %.6f, loss: %.6f' % \
+        #                (epoch, train_accuracy, train_F1_T, train_P_T, train_R_T, train_F1_F, train_P_F, train_R_F, run_loss)
+        # print(save_content, ' ' * 200)
+        save_content = 'Epoch: %d:\nTrain: Accuracy: %.6f, train_F1_weighted: %.6f, train_R_weighted: %.6f, train_precision_weighted: %.6f, train_F1: %.6f, train_R: %.6f, train_precision: %.6f, loss: %.6f' % \
+                       (epoch, train_accuracy, train_F1_weighted, train_R_weighted, train_precision_weighted, train_F1, train_R, train_precision,
+                        run_loss)
         print(save_content, ' ' * 200)
 
         if log_summary_writer:
             log_summary_writer.add_scalar('train_info/loss_epoch', run_loss, global_step=epoch)
             log_summary_writer.add_scalar('train_info/acc', train_accuracy, global_step=epoch)
-            log_summary_writer.add_scalar('train_info/train_F1_T', train_F1_T, global_step=epoch)
-            log_summary_writer.add_scalar('train_info/train_P_T', train_P_T, global_step=epoch)
-            log_summary_writer.add_scalar('train_info/train_R_T', train_R_T, global_step=epoch)
-            log_summary_writer.add_scalar('train_info/train_F1_F', train_F1_F, global_step=epoch)
-            log_summary_writer.add_scalar('train_info/train_P_F', train_P_F, global_step=epoch)
-            log_summary_writer.add_scalar('train_info/train_R_F', train_R_F, global_step=epoch)
+            log_summary_writer.add_scalar('train_info/train_F1_weighted', train_F1_weighted, global_step=epoch)
+            log_summary_writer.add_scalar('train_info/train_R_weighted', train_R_weighted, global_step=epoch)
+            log_summary_writer.add_scalar('train_info/train_precision_weighted', train_precision_weighted, global_step=epoch)
+            log_summary_writer.add_scalar('train_info/train_F1', train_F1, global_step=epoch)
+            log_summary_writer.add_scalar('train_info/train_R', train_R, global_step=epoch)
+            log_summary_writer.add_scalar('train_info/train_precision', train_precision, global_step=epoch)
             log_summary_writer.flush()
 
         train_log = {
             "epoch": epoch,
             "train_accuracy": train_accuracy,
-            "train_F1_T": train_F1_T,
-            "train_P_T": train_P_T,
-            "train_R_T": train_R_T,
-            "train_F1_F": train_F1_F,
-            "train_P_F": train_P_F,
-            "train_R_F": train_R_F,
+            "train_F1_weighted": train_F1_weighted,
+            "train_R_weighted": train_R_weighted,
+            "train_precision_weighted": train_precision_weighted,
+            "train_F1": train_F1,
+            "train_R": train_R,
+            "train_precision": train_precision,
             "run_loss": run_loss
         }
+
+        # if log_summary_writer:
+        #     log_summary_writer.add_scalar('train_info/loss_epoch', run_loss, global_step=epoch)
+        #     log_summary_writer.add_scalar('train_info/acc', train_accuracy, global_step=epoch)
+        #     log_summary_writer.add_scalar('train_info/train_F1_T', train_F1_T, global_step=epoch)
+        #     log_summary_writer.add_scalar('train_info/train_P_T', train_P_T, global_step=epoch)
+        #     log_summary_writer.add_scalar('train_info/train_R_T', train_R_T, global_step=epoch)
+        #     log_summary_writer.add_scalar('train_info/train_F1_F', train_F1_F, global_step=epoch)
+        #     log_summary_writer.add_scalar('train_info/train_P_F', train_P_F, global_step=epoch)
+        #     log_summary_writer.add_scalar('train_info/train_R_F', train_R_F, global_step=epoch)
+        #     log_summary_writer.flush()
+        #
+        # train_log = {
+        #     "epoch": epoch,
+        #     "train_accuracy": train_accuracy,
+        #     "train_F1_T": train_F1_T,
+        #     "train_P_T": train_P_T,
+        #     "train_R_T": train_R_T,
+        #     "train_F1_F": train_F1_F,
+        #     "train_P_F": train_P_F,
+        #     "train_R_F": train_R_F,
+        #     "run_loss": run_loss
+        # }
 
         last_F1, last_Accuracy = dev_process.dev_process(opt, critertion, cl_model, dev_loader, test_loader, last_F1, last_Accuracy, train_log, log_summary_writer)

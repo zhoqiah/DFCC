@@ -15,6 +15,7 @@ from torch import nn
 import numpy as np
 import layers
 from Orthographic_pytorch import *
+import torch.nn.functional as F
 
 
 class ModelParam:
@@ -44,6 +45,45 @@ class ActivateFun(nn.Module):
             return torch.relu(x)
         elif self.activate_fun == 'gelu':
             return self._gelu(x)
+
+
+class CompositionClassifier(nn.Module):
+
+    def __init__(self, input_dim, num_classes, normalization_sign=False):
+        super().__init__()
+        # self.half_input_dim = int(input_dim)
+
+        self.mlp = nn.Linear(input_dim*2, input_dim)  # 调整拼接后的维度
+        # self.mlp2 = nn.Linear(input_dim, input_dim)  # 将拼接后的维度调整回原始维度
+        self.fc = nn.Linear(input_dim, num_classes)
+        self.normalization = normalization_sign
+
+    def forward(self, f1, f2):
+        """
+        :param f1: other modality (e.g. audio or vision)
+        :param f2: video modality
+        :return:
+        """
+        if self.normalization:
+            f1_n = F.normalize(f1, dim=1)
+            f2_n = F.normalize(f2, dim=1)
+            residual = torch.cat((f1_n, f2_n), 1)
+        else:
+            residual = torch.cat((f1, f2), 1)
+
+        #### compose two modalities by residual learning
+        residual = self.mlp(residual) ### 调整拼接后的维度
+
+        # self.half_input_dim 384
+        # print(f1.shape)   # torch.Size([32, 768])
+        # print(residual.shape)   # torch.Size([32, 384])
+        # residual = self.mlp2(residual)  ### 调整回原始维度
+        feature = f1 + residual  # other modality + residual (default)
+        # print(feature.shape)
+        ## perform classification here
+        out = self.fc(feature)
+
+        return out, feature
 
 
 class TextModel(nn.Module):
@@ -85,9 +125,9 @@ class FuseModel(nn.Module):
             ActivateFun(opt)
         )
         self.image_change = nn.Sequential(
-            nn.Linear(256 if pretrained else 192, opt.tran_dim),
+            nn.Linear(64 if pretrained else 192, opt.tran_dim),  # 64 if pretrained else 192
             ActivateFun(opt)
-        )
+        )  # 256
 
         self.output_attention = nn.Sequential(
             nn.Linear(opt.tran_dim, opt.tran_dim // 2),
@@ -101,22 +141,28 @@ class FuseModel(nn.Module):
             nn.Linear(opt.tran_dim // 2, 2)
         )
         self.transformer = Transformer(nhead=1, num_encoder_layers=1, num_decoder_layers=1, d_model=768,
-                                       dim_feedforward=128)  # 4,1,1,768,128;
+                                       dim_feedforward=128 )  # 4,1,1,768,128;
+
 
     def forward(self, text_inputs, bert_attention_mask, image_inputs, text_image_mask):
         text_encoder = self.text_model(text_inputs, attention_mask=bert_attention_mask)
         text_encoder = text_encoder.last_hidden_state
-        text_init = self.text_change(text_encoder)
+        text_init = text_encoder
+        # text_init = self.text_change(text_encoder)
 
         image_feature = self.vit(image_inputs)
-        image_init = image_feature.last_hidden_state
-        image_init = self.image_change(image_init)
+        image_encoder = image_feature.last_hidden_state
+        image_init = self.image_change(image_encoder)
 
         # transformer
         image_init = image_init.permute(1, 0, 2).contiguous()
         text_init = text_init.permute(1, 0, 2).contiguous()
         text_image_transformer = self.transformer(image_init, text_init)
         text_image_transformer = text_image_transformer.permute(1, 2, 0).contiguous()
+
+        # 新增代码
+        out_array = text_image_transformer.detach().cpu().numpy()
+        np.save('weibo2.npy', out_array)
 
         # text_image_transformer = torch.cat((text_init, image_init), dim=1)
         # text_image_transformer = text_image_transformer.permute(0, 2, 1).contiguous()
@@ -147,7 +193,7 @@ class TeacherModel(FuseModel):
 
 
 class StudentModel(FuseModel):
-    def __init__(self, opt, fuse_type='ave'):
+    def __init__(self, opt):
         super(StudentModel, self).__init__(opt, pretrained=False)
 
 
@@ -167,6 +213,7 @@ class CLModel(nn.Module):
             ActivateFun(opt),
             nn.Linear(opt.tran_dim // 2, 2)
         )
+        self.CompositionClassifier = CompositionClassifier(opt.tran_dim, 2)
 
     def forward(self, data_orgin, data_augment=None, labels=None, target_labels=None, text=None):
         student_output = self.student_model(data_orgin.texts, data_orgin.bert_attention_mask, data_orgin.images,
@@ -175,7 +222,10 @@ class CLModel(nn.Module):
         teacher_output = self.teacher_model(data_orgin.texts, data_orgin.bert_attention_mask, data_orgin.images,
                                             data_orgin.text_image_mask)
 
-        output = self.output_classify(student_output)
+        # output = self.output_classify(student_output)
+
+        # 采用CompositionClassifier
+        output, _ = self.CompositionClassifier(student_output, teacher_output)
         return output, student_output, teacher_output
 
 
